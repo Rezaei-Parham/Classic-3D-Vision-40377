@@ -53,7 +53,7 @@ class BallDetector:
     def preset_output_video(self,f1,f2,name='output.mp4'):
         fourcc = cv2.VideoWriter_fourcc(*'XVID')
         output_video = cv2.VideoWriter(name,fourcc, 30.0, (self.output_width,self.output_height))
-        # first two frames
+      
         output_video.write(f1)
         output_video.write(f2)
         return output_video
@@ -61,7 +61,7 @@ class BallDetector:
     def find_ball_points(self, frames):
         frames = self.resize_frames(frames, self.width, self.height)
 
-        ballpoints = []
+        ballpoints = [[None,None],[None,None]]
         for i in range(2, len(frames)):
             X = np.concatenate((frames[i], frames[i - 1], frames[i - 2]), axis=2)
             X = np.rollaxis(X, 2, 0)
@@ -71,7 +71,7 @@ class BallDetector:
             heatmap = cv2.resize(pr, (self.output_width, self.output_height))
             ret, heatmap = cv2.threshold(heatmap, 127, 255, cv2.THRESH_BINARY)
 
-            # Find the circle in the image with 2 <= radius <= 7
+
             circles = cv2.HoughCircles(heatmap, cv2.HOUGH_GRADIENT, dp=1, minDist=1, param1=50, param2=2, minRadius=2, maxRadius=7)
 
             x, y = None, None
@@ -83,7 +83,7 @@ class BallDetector:
 
         return ballpoints
     
-    def draw_trajectories(self, frames, ballpoints, name='output.mp4'):
+    def draw_ball(self, frames, ballpoints, name='output.mp4'):
         output_video = self.preset_output_video(frames[0], frames[1],name)
         for i in range(2,len(frames)):
             PIL_image = cv2.cvtColor(frames[i], cv2.COLOR_BGR2RGB)
@@ -101,46 +101,17 @@ class BallDetector:
             output_video.write(opencvImage)
 
         output_video.release()
-    
-    def infer_model(self, frames):
 
-        output_video = self.preset_output_video(frames[0],frames[1])
-        oldframes = frames.copy()
-        frames = self.resize_frames(frames, self.width, self.height)
+    def draw_trajectory(self, frames, ballpoints, name='output.mp4'):
         q = queue.deque()
         for i in range(0,8):
             q.appendleft(None)
-        
-        ballpoints = [None,None]
+        output_video = self.preset_output_video(frames[0], frames[1],name)
         for i in range(2,len(frames)):
-            X =  np.concatenate((frames[i], frames[i-1], frames[i-2]),axis=2)
-            X = np.rollaxis(X, 2, 0)
-            pr = self.model.predict(np.array([X]))[0]
-            pr = pr.reshape((self.height ,self.width , self.n_classes)).argmax( axis=2 )
-            pr = pr.astype(np.uint8) 
-            heatmap = cv2.resize(pr,(self.output_width,self.output_height))
-            ret,heatmap = cv2.threshold(heatmap,127,255,cv2.THRESH_BINARY)
-            out = oldframes[i]
-            #find the circle in image with 2<=radius<=7
-            circles = cv2.HoughCircles(heatmap, cv2.HOUGH_GRADIENT,dp=1,minDist=1,param1=50,param2=2,minRadius=2,maxRadius=7)
-            # for drawing
-            PIL_image = cv2.cvtColor(out, cv2.COLOR_BGR2RGB)   
+            PIL_image = cv2.cvtColor(frames[i], cv2.COLOR_BGR2RGB)
             PIL_image = Image.fromarray(PIL_image)
-            x,y=None,None
-            if circles is not None:
-                #if only one tennis be detected
-                if len(circles) == 1:
-                    x = int(circles[0][0][0])
-                    y = int(circles[0][0][1])
-                    q.appendleft([x,y])   
-                    q.pop()    
-                else:
-                    q.appendleft(None)
-                    q.pop()
-            else:
-                q.appendleft(None)
-                q.pop()
-            ballpoints.append([x,y])
+            q.pop()
+            q.appendleft([ballpoints[i][0],ballpoints[i][1]])
             for i in range(0,8):
                 if q[i] is not None:
                     draw_x = q[i][0]
@@ -149,40 +120,85 @@ class BallDetector:
                     draw = ImageDraw.Draw(PIL_image)
                     draw.ellipse(bbox, outline ='red')
                     del draw
-            
-            opencvImage =  cv2.cvtColor(np.array(PIL_image), cv2.COLOR_RGB2BGR)
+
+            opencvImage = cv2.cvtColor(np.array(PIL_image), cv2.COLOR_RGB2BGR)
             output_video.write(opencvImage)
 
         output_video.release()
-        return ballpoints
 
-    def postprocess(self, feature_map, prev_pred, scale=2, max_dist=80):
-        """
-        :params
-            feature_map: feature map with shape (1,360,640)
-            prev_pred: [x,y] coordinates of ball prediction from previous frame
-            scale: scale for conversion to original shape (720,1280)
-            max_dist: maximum distance from previous ball detection to remove outliers
-        :return
-            x,y ball coordinates
-        """
-        feature_map *= 255
-        feature_map = feature_map.reshape((self.height, self.width))
-        feature_map = feature_map.astype(np.uint8)
-        ret, heatmap = cv2.threshold(feature_map, 127, 255, cv2.THRESH_BINARY)
-        circles = cv2.HoughCircles(heatmap, cv2.HOUGH_GRADIENT, dp=1, minDist=1, param1=50, param2=2, minRadius=2,
-                                   maxRadius=7)
-        x, y = None, None
-        if circles is not None:
-            if prev_pred[0]:
-                for i in range(len(circles[0])):
-                    x_temp = circles[0][i][0]*scale
-                    y_temp = circles[0][i][1]*scale
-                    dist = distance.euclidean((x_temp, y_temp), prev_pred)
-                    if dist < max_dist:
-                        x, y = x_temp, y_temp
-                        break                
-            else:
-                x = circles[0][0][0]*scale
-                y = circles[0][0][1]*scale
-        return x, y
+    def draw_trajectory_pride(self, frames, ballpoints, name='output.mp4'):
+        output_video = self.preset_output_video(frames[0], frames[1], name)
+        # Define a queue to keep track of the last 8 points
+        points_queue = queue.deque(maxlen=8)
+
+        for i in range(len(frames)):
+            PIL_image = cv2.cvtColor(frames[i], cv2.COLOR_BGR2RGB)
+            PIL_image = Image.fromarray(PIL_image)
+            draw = ImageDraw.Draw(PIL_image)
+
+            # Update the queue with the current point
+            points_queue.appendleft(ballpoints[i])
+
+            # Define a list of colors for the 8 points
+            colors = ['red', 'orange', 'yellow', 'green', 'blue', 'indigo', 'violet', 'black']
+
+            # Iterate over the points in the queue
+            for j, point in enumerate(points_queue):
+                if point[0] is not None:
+                    draw_x, draw_y = point
+                    # Adjust the size of the point based on its position in the queue
+                    size_factor = 6 - j  # Size decreases for older points in the queue
+                    size_factor = max(1, size_factor)  # Ensure size is at least 1
+                    bbox = (draw_x - size_factor, draw_y - size_factor, draw_x + size_factor, draw_y + size_factor)
+                    # Use the j-th color from the colors list
+                    draw.ellipse(bbox, outline=colors[j], fill=colors[j])
+
+            del draw
+
+            opencvImage = cv2.cvtColor(np.array(PIL_image), cv2.COLOR_RGB2BGR)
+            output_video.write(opencvImage)
+
+        output_video.release()
+
+
+    def interpolate_missing_points(self,ballpoints):
+        for i in range(len(ballpoints)):
+            if ballpoints[i] == [None, None]:
+                prev_index = next((j for j in range(i-1, -1, -1) if ballpoints[j] != [None, None]), None)
+                next_index = next((j for j in range(i+1, len(ballpoints)) if ballpoints[j] != [None, None]), None)
+
+                if prev_index is not None and next_index is not None:
+                    # Interpolate using both the previous and next valid points
+                    ballpoints[i] = [(ballpoints[prev_index][0] + ballpoints[next_index][0]) / 2,
+                                    (ballpoints[prev_index][1] + ballpoints[next_index][1]) / 2]
+                elif prev_index is not None:
+                    # Use the previous point if no next valid point is available
+                    ballpoints[i] = ballpoints[prev_index]
+                elif next_index is not None:
+                    # Use the next point if no previous valid point is available
+                    ballpoints[i] = ballpoints[next_index]
+        return ballpoints
+    
+    def interpolate_far_points(self,ballpoints, max_dist=50):
+        for i in range(1, len(ballpoints)):
+            if ballpoints[i] is not None and ballpoints[i - 1] is not None:
+                dist = np.linalg.norm(np.array(ballpoints[i]) - np.array(ballpoints[i - 1]))
+                if dist > max_dist:
+                    # Interpolate
+                    if i < len(ballpoints) - 1 and ballpoints[i + 1] is not None:
+                        # Interpolate using the next point if it's not None
+                        ballpoints[i] = [(ballpoints[i - 1][0] + ballpoints[i + 1][0]) / 2,
+                                        (ballpoints[i - 1][1] + ballpoints[i + 1][1]) / 2]
+                    else:
+                        # Interpolate using just the previous point if the next point is None
+                        ballpoints[i] = ballpoints[i - 1]
+        return ballpoints
+    
+    def postprocess_points(self,ballpoints,interpolate_none=True,interpolate_far=True,max_dist=50):
+        balls = ballpoints
+        if interpolate_none:
+            balls = self.interpolate_missing_points(balls)
+        if interpolate_far:
+            balls = self.interpolate_far_points(balls,max_dist)
+        return balls
+    
