@@ -6,7 +6,7 @@ import numpy as np
 from PIL import Image, ImageDraw
 
 class BallDetector:
-    def __init__(self, path_weights=None, n_classes =  256, device='cuda'):
+    def __init__(self, path_weights=None, n_classes =  256, device='mps'):
         self.n_classes = n_classes
         self.width , self.height = 640, 360
         # model definition
@@ -19,10 +19,11 @@ class BallDetector:
         self.model = m
         self.device = device
 
-    def read_video(self,path_video):
+    def read_video(self,path_video, skip_frames=1):
         """ Read video file    
         :params
             path_video: path to video file
+            skip_frames: number of frames to skip (to speed up processing)
         :return
             frames: list of video frames
             fps: frames per second
@@ -32,16 +33,39 @@ class BallDetector:
         self.output_width =  int(cap.get(cv2.CAP_PROP_FRAME_WIDTH))
         self.output_height = int(cap.get(cv2.CAP_PROP_FRAME_HEIGHT))
         frames = []
+        frame_count = 0
         while cap.isOpened():
             ret, frame = cap.read()
             if ret:
-                frames.append(frame)
+                if frame_count % skip_frames == 0:
+                    frames.append(frame)
             else:
                 break
+            frame_count +=1
         cap.release()
         return frames, fps
     
+    def image_frame(self,frames,image_path):
+        """ Read image file
+        :params
+            frames: list of video frames
+            image_path: path to image file
+        :return
+            f: list of image frames with the same size as the input frames. 
+        """
+        backImage = cv2.imread(image_path)
+        f = np.array([backImage for _ in range(len(frames))])
+        return f
+    
     def resize_frames(self,frames, width, height):
+        """ Resize frames to the input size of the model
+        :params
+            frames: list of video frames
+            width: width of the resized frames
+            height: height of the resized frames
+        :return
+            f: list of resized frames
+        """
         f = []
         for frame in frames:
             new_frame = cv2.resize(frame, ( width , height ))
@@ -49,8 +73,14 @@ class BallDetector:
             f.append(new_frame)
         return f
 
-
     def preset_output_video(self,f1,f2,name='output.mp4'):
+        """ Preset output video
+        :params
+            f1: first frame of the video
+            f2: second frame of the video
+        :return
+            output_video: video object to write frames to the output video file. 
+        """
         fourcc = cv2.VideoWriter_fourcc(*'XVID')
         output_video = cv2.VideoWriter(name,fourcc, 30.0, (self.output_width,self.output_height))
       
@@ -59,6 +89,12 @@ class BallDetector:
         return output_video
     
     def find_ball_points(self, frames):
+        """ Find the ball points in the video
+        :params
+            frames: list of video frames
+        :return
+            ballpoints: list of ball points in the video (x,y) coordinates. 
+        """
         frames = self.resize_frames(frames, self.width, self.height)
 
         ballpoints = [[None,None],[None,None]]
@@ -102,7 +138,7 @@ class BallDetector:
 
         output_video.release()
 
-    def draw_trajectory(self, frames, ballpoints, name='output.mp4'):
+    def draw_trajectory_tracknetStyle(self, frames, ballpoints, name='output.mp4'):
         q = queue.deque()
         for i in range(0,8):
             q.appendleft(None)
@@ -160,6 +196,16 @@ class BallDetector:
 
         output_video.release()
 
+    def draw_trajectory(self, frames, ballpoints, name='output.mp4', style='simple'):
+        if style == 'simple':
+            return self.draw_ball(frames, ballpoints, name)
+        elif style == 'tracknet':
+            return self.draw_trajectory_tracknetStyle(frames, ballpoints, name)
+        elif style == 'pride':
+            return self.draw_trajectory_pride(frames, ballpoints, name)
+        else:
+            print('Invalid style')
+            return None
 
     def interpolate_missing_points(self,ballpoints):
         for i in range(len(ballpoints)):
@@ -202,3 +248,10 @@ class BallDetector:
             balls = self.interpolate_far_points(balls,max_dist)
         return balls
     
+
+
+bd = BallDetector(path_weights='weights/model.3')
+frames, fps = bd.read_video('test.mp4')
+ballpoints = bd.find_ball_points(frames)
+ballpoints = bd.postprocess_points(ballpoints)
+bd.draw_trajectory_pride(frames, ballpoints, 'test1output.mp4')
