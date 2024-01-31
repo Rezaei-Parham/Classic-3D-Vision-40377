@@ -102,9 +102,11 @@ class BallDetector:
             X = np.concatenate((frames[i], frames[i - 1], frames[i - 2]), axis=2)
             X = np.rollaxis(X, 2, 0)
             pr = self.model.predict(np.array([X]))[0]
+            del X
             pr = pr.reshape((self.height, self.width, self.n_classes)).argmax(axis=2)
             pr = pr.astype(np.uint8)
             heatmap = cv2.resize(pr, (self.output_width, self.output_height))
+            del pr
             ret, heatmap = cv2.threshold(heatmap, 127, 255, cv2.THRESH_BINARY)
 
 
@@ -116,7 +118,8 @@ class BallDetector:
                 y = int(circles[0][0][1])
 
             ballpoints.append([x, y])
-
+        del self.model
+        self.model = Models.TrackNet.TrackNet(self.n_classes,input_height=self.height,input_width=self.width)
         return ballpoints
     
     def draw_ball(self, frames, ballpoints, name='output.mp4'):
@@ -250,8 +253,8 @@ class BallDetector:
     
 
 
-bd = BallDetector(path_weights='weights/model.3')
-frames, fps = bd.read_video('test.mp4')
-ballpoints = bd.find_ball_points(frames)
-ballpoints = bd.postprocess_points(ballpoints)
-bd.draw_trajectory_pride(frames, ballpoints, 'test1output.mp4')
+# bd = BallDetector(path_weights='weights/model.3')
+# frames, fps = bd.read_video('test.mp4')
+# ballpoints = bd.find_ball_points(frames)
+# ballpoints = bd.postprocess_points(ballpoints)
+# bd.draw_trajectory_pride(frames, ballpoints, 'test1output.mp4')
